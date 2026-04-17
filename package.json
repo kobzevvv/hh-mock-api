@@ -1,0 +1,27 @@
+{
+  "name": "hh-mock-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "gcp-build": "npm run build",
+    "start": "node dist/src/index.js",
+    "test": "vitest run",
+    "check": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "fastify": "^5.3.3",
+    "zod": "^3.24.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.6.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}
