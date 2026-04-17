@@ -31,8 +31,8 @@
 1. Получить token:
 
 ```bash
+BASE=https://your-hh-mock.example.com
 TOKEN=$(gcloud auth print-identity-token)
-BASE=https://hh-mock-api-q4667xuq6a-uc.a.run.app
 ```
 
 2. Создать вакансию:
@@ -80,7 +80,7 @@ curl -s -X POST "$BASE/negotiations/<negotiation_id>/messages" \
 - TTL по умолчанию `3 часа`
 - состояние сейчас in-memory
 - после рестарта Cloud Run или новой ревизии sandbox может исчезнуть
-- сервис закрыт identity token-ом, не публичный
+- режим доступа зависит от деплоя: сервис может быть private или public sandbox
 
 ## Что использовать агенту
 

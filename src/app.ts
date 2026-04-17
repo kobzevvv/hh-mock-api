@@ -1,3 +1,4 @@
+import formbody from "@fastify/formbody";
 import Fastify from "fastify";
 import { z } from "zod";
 import { InMemoryMockStore, type MockStore, type NegotiationCollection } from "./domain.js";
@@ -18,8 +19,17 @@ const changeStateSchema = z.object({
 
 const hhCollections = new Set<NegotiationCollection>(["response", "phone_interview", "interview", "offer", "discard"]);
 
+function requestBaseUrl(request: { headers: Record<string, unknown> }) {
+  const forwardedProto = String(request.headers["x-forwarded-proto"] ?? "").trim();
+  const forwardedHost = String(request.headers["x-forwarded-host"] ?? "").trim();
+  const host = forwardedHost || String(request.headers.host ?? "localhost:8080");
+  const protocol = forwardedProto || (host.startsWith("localhost") || host.startsWith("127.0.0.1") ? "http" : "https");
+  return `${protocol}://${host}`;
+}
+
 export function buildApp({ store = new InMemoryMockStore(), now = () => new Date() }: { store?: MockStore; now?: () => Date } = {}) {
   const app = Fastify({ logger: true });
+  void app.register(formbody);
 
   app.addHook("onRequest", async (request, reply) => {
     reply.header("x-request-id", request.id);
@@ -79,12 +89,16 @@ export function buildApp({ store = new InMemoryMockStore(), now = () => new Date
     processed: store.runDue(now())
   }));
 
-  app.post("/token", async () => ({
-    access_token: "mock_access_token",
-    refresh_token: "mock_refresh_token",
-    token_type: "bearer",
-    expires_in: 3600
-  }));
+  app.post("/token", async (request) => {
+    const payload = request.body as Record<string, unknown> | undefined;
+    return {
+      access_token: "mock_access_token",
+      refresh_token: "mock_refresh_token",
+      token_type: "bearer",
+      expires_in: 3600,
+      grant_type: payload?.grant_type ?? null
+    };
+  });
 
   app.get("/me", async (request) => ({
     id: "mock-employer",
@@ -98,6 +112,7 @@ export function buildApp({ store = new InMemoryMockStore(), now = () => new Date
 
   app.get("/negotiations/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
+    const baseUrl = requestBaseUrl(request);
     if (hhCollections.has(id as NegotiationCollection)) {
       const { vacancy_id, page = "0", per_page = "20" } = request.query as Record<string, string | undefined>;
       const pageNum = Math.max(0, Number(page || 0));
@@ -116,7 +131,7 @@ export function buildApp({ store = new InMemoryMockStore(), now = () => new Date
           state: { id: item.collection },
           resume: {
             id: item.resumeId,
-            url: `https://api.hh.ru/resumes/${item.resumeId}`
+            url: `${baseUrl}/resumes/${item.resumeId}`
           },
           vacancy: { id: item.vacancyId }
         }))
@@ -135,7 +150,7 @@ export function buildApp({ store = new InMemoryMockStore(), now = () => new Date
       state: { id: negotiation.collection },
       resume: {
         id: negotiation.resumeId,
-        url: `https://api.hh.ru/resumes/${negotiation.resumeId}`
+        url: `${baseUrl}/resumes/${negotiation.resumeId}`
       },
       vacancy: { id: negotiation.vacancyId },
       candidate: {

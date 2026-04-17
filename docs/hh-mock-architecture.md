@@ -495,10 +495,7 @@ LLM один раз генерирует:
 
 ## Источники
 
-- Локальный документ: [hh-api-mocking-plan.md](/Users/vova/Documents/GitHub/hiring-agent-chat-layout-fix/docs/hh-api-mocking-plan.md)
-- Локальный код: [hh-api-client.js](/Users/vova/Documents/GitHub/hiring-agent/services/hh-connector/src/hh-api-client.js)
-- Локальный код: [hh-contract-mock.js](/Users/vova/Documents/GitHub/hiring-agent/services/hh-connector/src/hh-contract-mock.js)
-- Локальный код: [hh-mock-server.py](/Users/vova/Documents/GitHub/hiring-agent/scripts/hh-mock-server.py)
+- Related internal planning/code references exist in adjacent private repos and should be consulted there when working in the full monorepo context.
 - HH API authorization: https://raw.githubusercontent.com/hhru/api/master/docs/authorization.md
 - HH employer negotiations: https://raw.githubusercontent.com/hhru/api/master/docs/employer_negotiations.md
-- HH integration patterns: https://chillai.space/p/hh-api-integration-patterns?password=NJh_zOj6
+- HH integration patterns: internal note, keep private

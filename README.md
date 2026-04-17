@@ -6,8 +6,8 @@ Current deployment:
 
 - Cloud Run service: `hh-mock-api`
 - Region: `us-central1`
-- URL: `https://hh-mock-api-q4667xuq6a-uc.a.run.app`
-- Auth mode: authenticated-only via Google identity token
+- URL: deploy-specific, set your own value in `BASE`
+- Auth mode: deployment-dependent
 
 ## What Works Now
 
@@ -16,7 +16,7 @@ Current deployment:
 - HH-like endpoints work for negotiations, messages, states, resumes, `/token`, `/me`
 - employer replies trigger delayed applicant replies
 - vacancy TTL defaults to `10800` seconds = `3 hours`
-- remote Cloud Run deployment is live and smoke-tested
+- the service has been smoke-tested in Cloud Run
 
 ## Current Limitation
 
@@ -52,11 +52,11 @@ Mock control routes:
 
 ## User Quickstart
 
-1. Get an identity token:
+1. Set your base URL and, if needed, an identity token:
 
 ```bash
+BASE=https://your-hh-mock.example.com
 TOKEN=$(gcloud auth print-identity-token)
-BASE=https://hh-mock-api-q4667xuq6a-uc.a.run.app
 ```
 
 2. Check health:
@@ -152,12 +152,15 @@ gcloud run deploy hh-mock-api \
   --set-env-vars NODE_ENV=production
 ```
 
-`allUsers` invoker binding is blocked by org policy in the current GCP project, so public unauthenticated access is not available.
+Public vs authenticated access depends on how you deploy the service.
+If you deploy to a private Cloud Run service, call it with an identity token.
+If you deploy a public sandbox instance, `BASE` alone is enough.
 
 ## Repo Structure
 
-- [src/app.ts](/Users/vova/Documents/GitHub/hh-mock-api/src/app.ts): Fastify HTTP routes
-- [src/domain.ts](/Users/vova/Documents/GitHub/hh-mock-api/src/domain.ts): in-memory sandbox state and reply logic
-- [src/index.ts](/Users/vova/Documents/GitHub/hh-mock-api/src/index.ts): service entrypoint
-- [tests/api.test.ts](/Users/vova/Documents/GitHub/hh-mock-api/tests/api.test.ts): local smoke-style tests
-- [docs/hh-mock-architecture.md](/Users/vova/Documents/GitHub/hh-mock-api/docs/hh-mock-architecture.md): target architecture and rollout direction
+- [src/app.ts](src/app.ts): Fastify HTTP routes
+- [src/domain.ts](src/domain.ts): in-memory sandbox state and reply logic
+- [src/index.ts](src/index.ts): service entrypoint
+- [tests/api.test.ts](tests/api.test.ts): local smoke-style tests
+- [docs/hh-mock-architecture.md](docs/hh-mock-architecture.md): target architecture and rollout direction
+- [docs/user-guide.md](docs/user-guide.md): user-facing quickstart

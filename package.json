@@ -15,6 +15,7 @@
     "check": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@fastify/formbody": "^8.0.2",
     "fastify": "^5.3.3",
     "zod": "^3.24.3"
   },
