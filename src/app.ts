@@ -28,6 +28,10 @@ const errorScenarioSchema = z.object({
   negotiation_id: z.string().trim().min(1).optional()
 });
 
+const advanceTimeSchema = z.object({
+  ms: z.number().int().min(0).max(86_400_000)
+});
+
 const hhCollections = new Set<NegotiationCollection>(["response", "phone_interview", "interview", "offer", "discard"]);
 
 function requestBaseUrl(request: { headers: Record<string, unknown> }) {
@@ -78,11 +82,29 @@ export function buildApp({
   void app.register(formbody);
   const authMode = resolveAuthMode(env);
   const expectedBearer = env.HH_MOCK_BEARER_TOKEN ? String(env.HH_MOCK_BEARER_TOKEN) : null;
+  let clockOffsetMs = 0;
+
+  function effectiveNow() {
+    return new Date(now().getTime() + clockOffsetMs);
+  }
+
+  function timeSnapshot(current: Date) {
+    const delayed = store.getDelayedReplyState(current);
+    return {
+      now: current.toISOString(),
+      offset_ms: clockOffsetMs,
+      delayed_replies: {
+        pending_count: delayed.pendingCount,
+        next_due_at: delayed.nextDueAt,
+        latest_due_at: delayed.latestDueAt
+      }
+    };
+  }
 
   app.addHook("onRequest", async (request, reply) => {
     reply.header("x-request-id", request.id);
-    store.sweep(now());
-    store.runDue(now());
+    store.sweep(effectiveNow());
+    store.runDue(effectiveNow());
 
     if (request.url === "/health") return;
 
@@ -114,7 +136,7 @@ export function buildApp({
 
   app.get("/health", async () => ({
     status: "ok",
-    now: now().toISOString()
+    now: effectiveNow().toISOString()
   }));
 
   app.post("/_mock/vacancies", async (request, reply) => {
@@ -126,7 +148,7 @@ export function buildApp({
       autoAdvanceOnEmployerMessage: payload.auto_advance_on_employer_message,
       initialReplyDelaySec: payload.initial_reply_delay_sec,
       followUpDelaySec: payload.follow_up_delay_sec
-    }, now());
+    }, effectiveNow());
 
     return reply.code(201).send({
       vacancy_id: vacancy.id,
@@ -146,11 +168,11 @@ export function buildApp({
         errors: [{ type: "not_found", value: "vacancy not found" }]
       });
     }
-    const negotiations = store.listNegotiations("response", { vacancyId }, now())
-      .concat(store.listNegotiations("phone_interview", { vacancyId }, now()))
-      .concat(store.listNegotiations("interview", { vacancyId }, now()))
-      .concat(store.listNegotiations("offer", { vacancyId }, now()))
-      .concat(store.listNegotiations("discard", { vacancyId }, now()));
+    const negotiations = store.listNegotiations("response", { vacancyId }, effectiveNow())
+      .concat(store.listNegotiations("phone_interview", { vacancyId }, effectiveNow()))
+      .concat(store.listNegotiations("interview", { vacancyId }, effectiveNow()))
+      .concat(store.listNegotiations("offer", { vacancyId }, effectiveNow()))
+      .concat(store.listNegotiations("discard", { vacancyId }, effectiveNow()));
 
     return {
       vacancy,
@@ -164,8 +186,46 @@ export function buildApp({
   });
 
   app.post("/_mock/tasks/run-due", async () => ({
-    processed: store.runDue(now())
+    processed: store.runDue(effectiveNow())
   }));
+
+  app.get("/_mock/time", async () => timeSnapshot(effectiveNow()));
+
+  app.post("/_mock/time/advance", async (request) => {
+    const payload = advanceTimeSchema.parse(request.body ?? {});
+    clockOffsetMs += payload.ms;
+    const current = effectiveNow();
+    const processed = store.runDue(current);
+    return {
+      advanced_ms: payload.ms,
+      processed,
+      ...timeSnapshot(current)
+    };
+  });
+
+  app.post("/_mock/time/flush-delayed-events", async () => {
+    const before = effectiveNow();
+    const delayed = store.getDelayedReplyState(before);
+    if (!delayed.latestDueAt) {
+      return {
+        advanced_ms: 0,
+        processed: 0,
+        ...timeSnapshot(before)
+      };
+    }
+
+    const latestDueMs = new Date(delayed.latestDueAt).getTime();
+    const beforeMs = before.getTime();
+    const advancedMs = Math.max(0, latestDueMs - beforeMs);
+    clockOffsetMs += advancedMs;
+    const current = effectiveNow();
+    const processed = store.runDue(current);
+    return {
+      advanced_ms: advancedMs,
+      processed,
+      ...timeSnapshot(current)
+    };
+  });
 
   app.get("/_mock/errors", async () => ({
     items: store.listErrorScenarios()
@@ -216,7 +276,7 @@ export function buildApp({
       const { vacancy_id, page = "0", per_page = "20" } = request.query as Record<string, string | undefined>;
       const pageNum = Math.max(0, Number(page || 0));
       const perPageNum = Math.max(1, Math.min(50, Number(per_page || 20)));
-      const items = store.listNegotiations(id as NegotiationCollection, { vacancyId: vacancy_id }, now());
+      const items = store.listNegotiations(id as NegotiationCollection, { vacancyId: vacancy_id }, effectiveNow());
       const start = pageNum * perPageNum;
       const chunk = items.slice(start, start + perPageNum);
       return {
@@ -237,7 +297,7 @@ export function buildApp({
       };
     }
 
-    const negotiation = store.getNegotiation(id, now());
+    const negotiation = store.getNegotiation(id, effectiveNow());
     if (!negotiation) {
       return reply.code(404).send({
         errors: [{ type: "not_found", value: "negotiation not found" }]
@@ -261,7 +321,7 @@ export function buildApp({
 
   app.get("/negotiations/:id/messages", async (request, reply) => {
     const { id } = request.params as { id: string };
-    const messages = store.getMessages(id, now());
+    const messages = store.getMessages(id, effectiveNow());
     if (!messages) {
       return reply.code(404).send({
         errors: [{ type: "not_found", value: "negotiation not found" }]
@@ -280,7 +340,7 @@ export function buildApp({
   app.post("/negotiations/:id/messages", async (request, reply) => {
     const { id } = request.params as { id: string };
     const payload = sendMessageSchema.parse(request.body ?? {});
-    const sent = store.sendEmployerMessage(id, payload.message, now());
+    const sent = store.sendEmployerMessage(id, payload.message, effectiveNow());
     if (!sent) {
       return reply.code(404).send({
         errors: [{ type: "not_found", value: "negotiation not found" }]
@@ -292,7 +352,7 @@ export function buildApp({
   app.put("/negotiations/:id/state", async (request, reply) => {
     const { id } = request.params as { id: string };
     const payload = changeStateSchema.parse(request.body ?? {});
-    const negotiation = store.changeState(id, payload.collection, now());
+    const negotiation = store.changeState(id, payload.collection, effectiveNow());
     if (!negotiation) {
       return reply.code(404).send({
         errors: [{ type: "not_found", value: "negotiation not found" }]
@@ -308,7 +368,7 @@ export function buildApp({
   app.get("/resumes/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
     const matches = ["response", "phone_interview", "interview", "offer", "discard"]
-      .flatMap((collection) => store.listNegotiations(collection as NegotiationCollection, {}, now()))
+      .flatMap((collection) => store.listNegotiations(collection as NegotiationCollection, {}, effectiveNow()))
       .find((item) => item.resumeId === id);
     if (!matches) {
       return reply.code(404).send({

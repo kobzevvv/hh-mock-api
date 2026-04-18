@@ -15,6 +15,7 @@ Current deployment:
 - 1-3 synthetic candidates are created automatically
 - HH-like endpoints work for negotiations, messages, states, resumes, `/token`, `/me`
 - employer replies trigger delayed applicant replies
+- delayed replies can be advanced deterministically through mock time control
 - vacancy TTL defaults to `10800` seconds = `3 hours`
 - `application/x-www-form-urlencoded` is supported on `/token` and `POST /negotiations/{id}/messages`
 - app-level auth supports `HH_MOCK_AUTH_MODE=none|bearer`
@@ -54,6 +55,9 @@ Mock control routes:
 - `GET /_mock/errors`
 - `POST /_mock/errors`
 - `DELETE /_mock/errors`
+- `GET /_mock/time`
+- `POST /_mock/time/advance`
+- `POST /_mock/time/flush-delayed-events`
 - `GET /health`
 
 Contract and roadmap:
@@ -131,7 +135,14 @@ curl -s -X POST "$BASE/negotiations/<negotiation_id>/messages" \
   -d '{"message":"Расскажите, пожалуйста, про опыт и зарплатные ожидания"}'
 ```
 
-7. Wait about 20-30 seconds and poll messages again. The candidate will answer.
+7. Flush delayed replies without waiting:
+
+```bash
+curl -s -X POST "$BASE/_mock/time/flush-delayed-events" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+8. Poll messages again. The candidate will answer.
 
 ## Error Injection
 
@@ -144,8 +155,8 @@ curl -s -X POST "$BASE/_mock/errors" \
   -d '{
     "status": 429,
     "method": "GET",
-    "path_prefix": "/negotiations/",
-    "repeat": 1
+    "path_pattern": "/negotiations/",
+    "times": 1
   }'
 ```
 
@@ -153,6 +164,12 @@ List active error scenarios:
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" "$BASE/_mock/errors"
+```
+
+Inspect virtual time state:
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" "$BASE/_mock/time"
 ```
 
 ## Local Development

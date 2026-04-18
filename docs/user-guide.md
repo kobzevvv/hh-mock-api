@@ -15,6 +15,7 @@
 - прислать следующее сообщение от кандидата с задержкой
 - принять `application/x-www-form-urlencoded` там, где это ожидает обычный HH client
 - управляемо отдать `401`, `403`, `404`, `429` через control API
+- детерминированно продвинуть virtual time без реального `sleep`
 
 ## Как думать про сервис
 
@@ -77,7 +78,14 @@ curl -s -X POST "$BASE/negotiations/<negotiation_id>/messages" \
   -d '{"message":"Расскажите, пожалуйста, подробнее про опыт и ожидания по деньгам"}'
 ```
 
-7. Через 20-30 секунд снова запросить messages.
+7. Вместо реального ожидания принудительно выполнить delayed reply:
+
+```bash
+curl -s -X POST "$BASE/_mock/time/flush-delayed-events" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+8. Снова запросить messages.
 
 ## Управляемые ошибки
 
@@ -90,8 +98,8 @@ curl -s -X POST "$BASE/_mock/errors" \
   -d '{
     "status": 429,
     "method": "GET",
-    "path_prefix": "/negotiations/",
-    "repeat": 1
+    "path_pattern": "/negotiations/",
+    "times": 1
   }'
 ```
 
@@ -99,6 +107,12 @@ curl -s -X POST "$BASE/_mock/errors" \
 
 ```bash
 curl -s -X DELETE -H "Authorization: Bearer $TOKEN" "$BASE/_mock/errors"
+```
+
+Проверить virtual time:
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" "$BASE/_mock/time"
 ```
 
 ## Что важно помнить

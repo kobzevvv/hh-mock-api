@@ -22,6 +22,9 @@
 - `GET /_mock/errors`
 - `POST /_mock/errors`
 - `DELETE /_mock/errors`
+- `GET /_mock/time`
+- `POST /_mock/time/advance`
+- `POST /_mock/time/flush-delayed-events`
 
 ## Supported Body Formats
 
@@ -51,6 +54,12 @@ Each scenario can be scoped by:
 - path prefix
 - optional negotiation id
 - repetition count
+
+## Deterministic Time Control
+
+- `GET /_mock/time`: current virtual time and delayed-reply queue summary
+- `POST /_mock/time/advance`: advance virtual time by `ms`
+- `POST /_mock/time/flush-delayed-events`: jump to the latest scheduled delayed reply and process due events
 
 ## Known Limitations
 

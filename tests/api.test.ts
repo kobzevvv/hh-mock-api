@@ -262,4 +262,111 @@ describe("hh mock api", () => {
 
     await app.close();
   });
+
+  test("supports deterministic time advance without external sleep", async () => {
+    const app = buildApp({
+      now: () => new Date("2026-04-17T12:00:00.000Z")
+    });
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/_mock/vacancies",
+      payload: {
+        vacancy_text: "Recruiter\nDeterministic time",
+        candidate_count: 1,
+        ttl_seconds: 10800,
+        follow_up_delay_sec: 20
+      }
+    });
+    const created = create.json();
+    const negotiationId = created.negotiation_ids[0];
+
+    const send = await app.inject({
+      method: "POST",
+      url: `/negotiations/${negotiationId}/messages`,
+      payload: {
+        message: "Давайте продолжим диалог"
+      }
+    });
+    expect(send.statusCode).toBe(201);
+
+    const before = await app.inject({
+      method: "GET",
+      url: `/negotiations/${negotiationId}/messages`
+    });
+    expect(before.json().items).toHaveLength(2);
+
+    const advanced = await app.inject({
+      method: "POST",
+      url: "/_mock/time/advance",
+      payload: {
+        ms: 20_000
+      }
+    });
+    expect(advanced.statusCode).toBe(200);
+    expect(advanced.json()).toMatchObject({
+      advanced_ms: 20_000,
+      processed: 1,
+      delayed_replies: {
+        pending_count: 0
+      }
+    });
+
+    const after = await app.inject({
+      method: "GET",
+      url: `/negotiations/${negotiationId}/messages`
+    });
+    expect(after.json().items).toHaveLength(3);
+    expect(after.json().items.at(-1).author.participant_type).toBe("applicant");
+
+    await app.close();
+  });
+
+  test("flushes delayed events to latest scheduled reply", async () => {
+    const app = buildApp({
+      now: () => new Date("2026-04-17T12:00:00.000Z")
+    });
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/_mock/vacancies",
+      payload: {
+        vacancy_text: "Recruiter\nFlush delayed events",
+        candidate_count: 1,
+        ttl_seconds: 10800,
+        follow_up_delay_sec: 25
+      }
+    });
+    const created = create.json();
+    const negotiationId = created.negotiation_ids[0];
+
+    await app.inject({
+      method: "POST",
+      url: `/negotiations/${negotiationId}/messages`,
+      payload: {
+        message: "Когда вам удобно продолжить?"
+      }
+    });
+
+    const flushed = await app.inject({
+      method: "POST",
+      url: "/_mock/time/flush-delayed-events"
+    });
+    expect(flushed.statusCode).toBe(200);
+    expect(flushed.json()).toMatchObject({
+      advanced_ms: 25_000,
+      processed: 1,
+      delayed_replies: {
+        pending_count: 0
+      }
+    });
+
+    const messages = await app.inject({
+      method: "GET",
+      url: `/negotiations/${negotiationId}/messages`
+    });
+    expect(messages.json().items).toHaveLength(3);
+
+    await app.close();
+  });
 });

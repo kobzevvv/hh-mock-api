@@ -80,6 +80,11 @@ export interface MockStore {
   addErrorScenario(input: Omit<ErrorScenario, "scenarioId">): ErrorScenario;
   clearErrorScenarios(): void;
   matchErrorScenario(details: { method: string; path: string; negotiationId?: string | null }): ErrorScenario | null;
+  getDelayedReplyState(now: Date): {
+    pendingCount: number;
+    nextDueAt: string | null;
+    latestDueAt: string | null;
+  };
 }
 
 function iso(date: Date): string {
@@ -298,6 +303,23 @@ export class InMemoryMockStore implements MockStore {
       return structuredClone(scenario);
     }
     return null;
+  }
+
+  getDelayedReplyState(now: Date): {
+    pendingCount: number;
+    nextDueAt: string | null;
+    latestDueAt: string | null;
+  } {
+    this.sweep(now);
+    const scheduled = [...this.negotiations.values()]
+      .map((item) => item.scheduledReplyAt)
+      .filter((item): item is string => Boolean(item))
+      .sort((a, b) => a.localeCompare(b));
+    return {
+      pendingCount: scheduled.length,
+      nextDueAt: scheduled[0] ?? null,
+      latestDueAt: scheduled.at(-1) ?? null
+    };
   }
 
   private cloneOrNull<T>(value: T | undefined): T | null {
