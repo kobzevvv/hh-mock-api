@@ -66,6 +66,13 @@ export interface ErrorScenario {
   negotiationId: string | null;
 }
 
+export interface MockEvent {
+  id: string;
+  type: string;
+  at: string;
+  payload: Record<string, unknown>;
+}
+
 export interface MockStore {
   createVacancy(input: CreateVacancyInput, now: Date): Vacancy;
   getVacancy(vacancyId: string): Vacancy | null;
@@ -77,14 +84,38 @@ export interface MockStore {
   sweep(now: Date): void;
   runDue(now: Date): number;
   listErrorScenarios(): ErrorScenario[];
-  addErrorScenario(input: Omit<ErrorScenario, "scenarioId">): ErrorScenario;
-  clearErrorScenarios(): void;
-  matchErrorScenario(details: { method: string; path: string; negotiationId?: string | null }): ErrorScenario | null;
+  addErrorScenario(input: Omit<ErrorScenario, "scenarioId">, now: Date): ErrorScenario;
+  clearErrorScenarios(now: Date): void;
+  matchErrorScenario(details: { method: string; path: string; negotiationId?: string | null }, now: Date): ErrorScenario | null;
   getDelayedReplyState(now: Date): {
     pendingCount: number;
     nextDueAt: string | null;
     latestDueAt: string | null;
   };
+  listEvents(limit?: number): MockEvent[];
+  getStateSnapshot(now: Date): {
+    vacancyCount: number;
+    negotiationCount: number;
+    errorScenarioCount: number;
+    delayedReplies: {
+      pendingCount: number;
+      nextDueAt: string | null;
+      latestDueAt: string | null;
+    };
+    vacancies: Vacancy[];
+    negotiations: Array<{
+      id: string;
+      vacancyId: string;
+      resumeId: string;
+      collection: NegotiationCollection;
+      updatedAt: string;
+      expiresAt: string;
+      scheduledReplyAt: string | null;
+      candidateName: string;
+      messageCount: number;
+    }>;
+  };
+  reset(now: Date): void;
 }
 
 function iso(date: Date): string {
@@ -132,6 +163,19 @@ export class InMemoryMockStore implements MockStore {
   private vacancies = new Map<string, Vacancy>();
   private negotiations = new Map<string, Negotiation>();
   private errorScenarios = new Map<string, ErrorScenario>();
+  private events: MockEvent[] = [];
+
+  private recordEvent(type: string, at: Date, payload: Record<string, unknown>) {
+    this.events.push({
+      id: randomUUID(),
+      type,
+      at: iso(at),
+      payload: structuredClone(payload)
+    });
+    if (this.events.length > 200) {
+      this.events.splice(0, this.events.length - 200);
+    }
+  }
 
   createVacancy(input: CreateVacancyInput, now: Date): Vacancy {
     const vacancyId = randomUUID();
@@ -179,6 +223,11 @@ export class InMemoryMockStore implements MockStore {
       negotiationIds
     };
     this.vacancies.set(vacancyId, vacancy);
+    this.recordEvent("vacancy_created", now, {
+      vacancy_id: vacancy.id,
+      candidate_count: vacancy.candidateCount,
+      negotiation_ids: vacancy.negotiationIds
+    });
     return structuredClone(vacancy);
   }
 
@@ -228,6 +277,12 @@ export class InMemoryMockStore implements MockStore {
     if (negotiation.autoAdvanceOnEmployerMessage && negotiation.collection === "response") {
       negotiation.collection = "phone_interview";
     }
+    this.recordEvent("employer_message_sent", now, {
+      negotiation_id: negotiationId,
+      hh_message_id: messageId,
+      collection: negotiation.collection,
+      scheduled_reply_at: negotiation.scheduledReplyAt
+    });
     return { hh_message_id: messageId };
   }
 
@@ -237,12 +292,20 @@ export class InMemoryMockStore implements MockStore {
     if (!negotiation) return null;
     negotiation.collection = collection;
     negotiation.updatedAt = iso(now);
+    this.recordEvent("negotiation_state_changed", now, {
+      negotiation_id: negotiationId,
+      collection
+    });
     return structuredClone(negotiation);
   }
 
   sweep(now: Date): void {
     for (const [vacancyId, vacancy] of this.vacancies.entries()) {
       if (new Date(vacancy.expiresAt).getTime() <= now.getTime()) {
+        this.recordEvent("vacancy_expired", now, {
+          vacancy_id: vacancyId,
+          negotiation_ids: vacancy.negotiationIds
+        });
         this.vacancies.delete(vacancyId);
         for (const negotiationId of vacancy.negotiationIds) {
           this.negotiations.delete(negotiationId);
@@ -269,6 +332,10 @@ export class InMemoryMockStore implements MockStore {
       negotiation.updatedAt = message.createdAt;
       negotiation.scheduledReplyAt = null;
       negotiation.nextApplicantPrompt = null;
+      this.recordEvent("applicant_reply_sent", now, {
+        negotiation_id: negotiation.id,
+        hh_message_id: messageId
+      });
       processed += 1;
     }
     return processed;
@@ -278,20 +345,33 @@ export class InMemoryMockStore implements MockStore {
     return [...this.errorScenarios.values()].map((item) => structuredClone(item));
   }
 
-  addErrorScenario(input: Omit<ErrorScenario, "scenarioId">): ErrorScenario {
+  addErrorScenario(input: Omit<ErrorScenario, "scenarioId">, now: Date): ErrorScenario {
     const scenario: ErrorScenario = {
       scenarioId: randomUUID(),
       ...input
     };
     this.errorScenarios.set(scenario.scenarioId, scenario);
+    this.recordEvent("error_scenario_added", now, {
+      scenario_id: scenario.scenarioId,
+      status: scenario.status,
+      method: scenario.method,
+      path_pattern: scenario.pathPattern,
+      remaining: scenario.remaining,
+      negotiation_id: scenario.negotiationId
+    });
     return structuredClone(scenario);
   }
 
-  clearErrorScenarios(): void {
+  clearErrorScenarios(now: Date): void {
+    if (this.errorScenarios.size > 0) {
+      this.recordEvent("error_scenarios_cleared", now, {
+        count: this.errorScenarios.size
+      });
+    }
     this.errorScenarios.clear();
   }
 
-  matchErrorScenario(details: { method: string; path: string; negotiationId?: string | null }): ErrorScenario | null {
+  matchErrorScenario(details: { method: string; path: string; negotiationId?: string | null }, now: Date): ErrorScenario | null {
     for (const scenario of this.errorScenarios.values()) {
       if (scenario.method !== "*" && scenario.method !== details.method.toUpperCase()) continue;
       if (!details.path.startsWith(scenario.pathPattern)) continue;
@@ -300,6 +380,14 @@ export class InMemoryMockStore implements MockStore {
       if (scenario.remaining <= 0) {
         this.errorScenarios.delete(scenario.scenarioId);
       }
+      this.recordEvent("error_scenario_matched", now, {
+        scenario_id: scenario.scenarioId,
+        status: scenario.status,
+        method: details.method,
+        path: details.path,
+        negotiation_id: details.negotiationId ?? null,
+        remaining: Math.max(0, scenario.remaining)
+      });
       return structuredClone(scenario);
     }
     return null;
@@ -320,6 +408,73 @@ export class InMemoryMockStore implements MockStore {
       nextDueAt: scheduled[0] ?? null,
       latestDueAt: scheduled.at(-1) ?? null
     };
+  }
+
+  listEvents(limit = 50): MockEvent[] {
+    const normalized = Math.max(1, Math.min(limit, 200));
+    return this.events.slice(-normalized).map((item) => structuredClone(item));
+  }
+
+  getStateSnapshot(now: Date): {
+    vacancyCount: number;
+    negotiationCount: number;
+    errorScenarioCount: number;
+    delayedReplies: {
+      pendingCount: number;
+      nextDueAt: string | null;
+      latestDueAt: string | null;
+    };
+    vacancies: Vacancy[];
+    negotiations: Array<{
+      id: string;
+      vacancyId: string;
+      resumeId: string;
+      collection: NegotiationCollection;
+      updatedAt: string;
+      expiresAt: string;
+      scheduledReplyAt: string | null;
+      candidateName: string;
+      messageCount: number;
+    }>;
+  } {
+    this.sweep(now);
+    const delayedReplies = this.getDelayedReplyState(now);
+    const vacancies = [...this.vacancies.values()].map((item) => structuredClone(item));
+    const negotiations = [...this.negotiations.values()]
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .map((item) => ({
+        id: item.id,
+        vacancyId: item.vacancyId,
+        resumeId: item.resumeId,
+        collection: item.collection,
+        updatedAt: item.updatedAt,
+        expiresAt: item.expiresAt,
+        scheduledReplyAt: item.scheduledReplyAt,
+        candidateName: item.candidate.fullName,
+        messageCount: item.messages.length
+      }));
+    return {
+      vacancyCount: vacancies.length,
+      negotiationCount: negotiations.length,
+      errorScenarioCount: this.errorScenarios.size,
+      delayedReplies,
+      vacancies,
+      negotiations
+    };
+  }
+
+  reset(now: Date): void {
+    const snapshot = {
+      vacancy_count: this.vacancies.size,
+      negotiation_count: this.negotiations.size,
+      error_scenario_count: this.errorScenarios.size,
+      event_count: this.events.length
+    };
+    this.vacancies.clear();
+    this.negotiations.clear();
+    this.errorScenarios.clear();
+    this.events = [];
+    this.recordEvent("store_reset", now, snapshot);
   }
 
   private cloneOrNull<T>(value: T | undefined): T | null {

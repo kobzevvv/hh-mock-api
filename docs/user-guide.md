@@ -16,6 +16,8 @@
 - принять `application/x-www-form-urlencoded` там, где это ожидает обычный HH client
 - управляемо отдать `401`, `403`, `404`, `429` через control API
 - детерминированно продвинуть virtual time без реального `sleep`
+- посмотреть текущее состояние sandbox и recent events
+- быстро сбросить sandbox целиком
 
 ## Как думать про сервис
 
@@ -113,6 +115,24 @@ curl -s -X DELETE -H "Authorization: Bearer $TOKEN" "$BASE/_mock/errors"
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" "$BASE/_mock/time"
+```
+
+Посмотреть текущее состояние sandbox:
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" "$BASE/_mock/state"
+```
+
+Посмотреть recent events:
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" "$BASE/_mock/events?limit=20"
+```
+
+Сбросить sandbox:
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $TOKEN" "$BASE/_mock/reset"
 ```
 
 ## Что важно помнить

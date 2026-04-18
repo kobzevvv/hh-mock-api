@@ -55,6 +55,9 @@ Mock control routes:
 - `GET /_mock/errors`
 - `POST /_mock/errors`
 - `DELETE /_mock/errors`
+- `GET /_mock/state`
+- `GET /_mock/events`
+- `POST /_mock/reset`
 - `GET /_mock/time`
 - `POST /_mock/time/advance`
 - `POST /_mock/time/flush-delayed-events`
@@ -170,6 +173,24 @@ Inspect virtual time state:
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" "$BASE/_mock/time"
+```
+
+Inspect sandbox state:
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" "$BASE/_mock/state"
+```
+
+Read recent sandbox events:
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" "$BASE/_mock/events?limit=20"
+```
+
+Reset the whole sandbox instance:
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $TOKEN" "$BASE/_mock/reset"
 ```
 
 ## Local Development

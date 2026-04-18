@@ -114,7 +114,7 @@ export function buildApp({
       negotiationId: typeof (request.params as Record<string, unknown> | undefined)?.id === "string"
         ? String((request.params as Record<string, unknown>).id)
         : null
-    });
+    }, effectiveNow());
     if (forced) {
       if (forced.status === 429) {
         reply.header("retry-after", "30");
@@ -189,6 +189,33 @@ export function buildApp({
     processed: store.runDue(effectiveNow())
   }));
 
+  app.get("/_mock/state", async () => {
+    const current = effectiveNow();
+    const snapshot = store.getStateSnapshot(current);
+    return {
+      now: current.toISOString(),
+      offset_ms: clockOffsetMs,
+      vacancy_count: snapshot.vacancyCount,
+      negotiation_count: snapshot.negotiationCount,
+      error_scenario_count: snapshot.errorScenarioCount,
+      delayed_replies: {
+        pending_count: snapshot.delayedReplies.pendingCount,
+        next_due_at: snapshot.delayedReplies.nextDueAt,
+        latest_due_at: snapshot.delayedReplies.latestDueAt
+      },
+      vacancies: snapshot.vacancies,
+      negotiations: snapshot.negotiations
+    };
+  });
+
+  app.get("/_mock/events", async (request) => {
+    const { limit = "50" } = request.query as Record<string, string | undefined>;
+    const normalized = Math.max(1, Math.min(200, Number(limit || 50)));
+    return {
+      items: store.listEvents(normalized)
+    };
+  });
+
   app.get("/_mock/time", async () => timeSnapshot(effectiveNow()));
 
   app.post("/_mock/time/advance", async (request) => {
@@ -239,13 +266,22 @@ export function buildApp({
       pathPattern: payload.path_pattern,
       remaining: payload.times,
       negotiationId: payload.negotiation_id ?? null
-    });
+    }, effectiveNow());
     return reply.code(201).send(scenario);
   });
 
   app.delete("/_mock/errors", async () => {
-    store.clearErrorScenarios();
+    store.clearErrorScenarios(effectiveNow());
     return { ok: true };
+  });
+
+  app.post("/_mock/reset", async () => {
+    clockOffsetMs = 0;
+    store.reset(effectiveNow());
+    return {
+      ok: true,
+      ...timeSnapshot(effectiveNow())
+    };
   });
 
   app.post("/token", async (request) => {

@@ -22,6 +22,9 @@
 - `GET /_mock/errors`
 - `POST /_mock/errors`
 - `DELETE /_mock/errors`
+- `GET /_mock/state`
+- `GET /_mock/events`
+- `POST /_mock/reset`
 - `GET /_mock/time`
 - `POST /_mock/time/advance`
 - `POST /_mock/time/flush-delayed-events`
@@ -60,6 +63,12 @@ Each scenario can be scoped by:
 - `GET /_mock/time`: current virtual time and delayed-reply queue summary
 - `POST /_mock/time/advance`: advance virtual time by `ms`
 - `POST /_mock/time/flush-delayed-events`: jump to the latest scheduled delayed reply and process due events
+
+## Diagnostics
+
+- `GET /_mock/state`: current sandbox snapshot
+- `GET /_mock/events`: recent sandbox events, supports `?limit=...`
+- `POST /_mock/reset`: clears vacancies, negotiations, errors, event log, and resets virtual time offset
 
 ## Known Limitations
 

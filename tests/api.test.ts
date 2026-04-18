@@ -369,4 +369,108 @@ describe("hh mock api", () => {
 
     await app.close();
   });
+
+  test("exposes diagnostics state and events", async () => {
+    const app = buildApp({
+      now: () => new Date("2026-04-17T12:00:00.000Z")
+    });
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/_mock/vacancies",
+      payload: {
+        vacancy_text: "Recruiter\nDiagnostics",
+        candidate_count: 1,
+        ttl_seconds: 10800
+      }
+    });
+    const created = create.json();
+
+    await app.inject({
+      method: "POST",
+      url: `/negotiations/${created.negotiation_ids[0]}/messages`,
+      payload: {
+        message: "Проверка диагностики"
+      }
+    });
+
+    const state = await app.inject({
+      method: "GET",
+      url: "/_mock/state"
+    });
+    expect(state.statusCode).toBe(200);
+    expect(state.json()).toMatchObject({
+      vacancy_count: 1,
+      negotiation_count: 1,
+      delayed_replies: {
+        pending_count: 1
+      }
+    });
+
+    const events = await app.inject({
+      method: "GET",
+      url: "/_mock/events?limit=10"
+    });
+    expect(events.statusCode).toBe(200);
+    expect(events.json().items.some((item: { type: string }) => item.type === "vacancy_created")).toBe(true);
+    expect(events.json().items.some((item: { type: string }) => item.type === "employer_message_sent")).toBe(true);
+
+    await app.close();
+  });
+
+  test("resets sandbox state and clock", async () => {
+    const app = buildApp({
+      now: () => new Date("2026-04-17T12:00:00.000Z")
+    });
+
+    await app.inject({
+      method: "POST",
+      url: "/_mock/vacancies",
+      payload: {
+        vacancy_text: "Recruiter\nReset sandbox",
+        candidate_count: 1,
+        ttl_seconds: 10800
+      }
+    });
+
+    await app.inject({
+      method: "POST",
+      url: "/_mock/time/advance",
+      payload: {
+        ms: 15_000
+      }
+    });
+
+    const reset = await app.inject({
+      method: "POST",
+      url: "/_mock/reset"
+    });
+    expect(reset.statusCode).toBe(200);
+    expect(reset.json()).toMatchObject({
+      ok: true,
+      offset_ms: 0,
+      delayed_replies: {
+        pending_count: 0
+      }
+    });
+
+    const state = await app.inject({
+      method: "GET",
+      url: "/_mock/state"
+    });
+    expect(state.json()).toMatchObject({
+      vacancy_count: 0,
+      negotiation_count: 0,
+      error_scenario_count: 0
+    });
+
+    const events = await app.inject({
+      method: "GET",
+      url: "/_mock/events?limit=5"
+    });
+    expect(events.json().items).toHaveLength(1);
+    expect(events.json().items[0].type).toBe("store_reset");
+
+    await app.close();
+  });
 });
