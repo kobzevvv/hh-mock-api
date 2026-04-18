@@ -69,6 +69,102 @@ Contract and roadmap:
 - [docs/backlog.md](docs/backlog.md)
 - [docs/public-sandbox-deploy.md](docs/public-sandbox-deploy.md)
 
+## Behavioral Contract
+
+`POST /_mock/vacancies` does three things:
+
+- creates one synthetic vacancy
+- creates `1..3` synthetic negotiations linked to that vacancy
+- seeds one initial applicant message per negotiation
+
+Default behavior:
+
+- new negotiations start in collection `response`
+- vacancy TTL defaults to `10800` seconds
+- `initial_reply_delay_sec` controls the timestamp of the initial applicant message
+- `follow_up_delay_sec` controls the timestamp of the next applicant reply after an employer message
+- employer follow-up reply is scheduled only after `POST /negotiations/{id}/messages`
+- `auto_advance_on_employer_message=false` by default, so negotiation stays in `response` unless explicitly configured otherwise
+
+### Timeline Example: Default Happy Path
+
+At `T0`:
+
+- call `POST /_mock/vacancies`
+- vacancy and negotiations are created immediately
+- each negotiation already exists and can be returned by `GET /negotiations/response`
+- each negotiation already has one seeded applicant message
+
+At `T1`:
+
+- call `GET /negotiations/response?vacancy_id=...`
+- you receive negotiations in collection `response`
+
+At `T2`:
+
+- call `GET /negotiations/{id}/messages`
+- you receive the initial applicant message
+
+At `T3`:
+
+- call `POST /negotiations/{id}/messages`
+- employer message is appended immediately
+- one delayed applicant follow-up is scheduled for `follow_up_delay_sec`
+
+At `T4`:
+
+- call `POST /_mock/time/flush-delayed-events`
+- scheduled follow-up applicant reply is generated without waiting in real time
+
+At `T5`:
+
+- call `GET /negotiations/{id}/messages`
+- thread now contains:
+  - initial applicant message
+  - employer message
+  - follow-up applicant reply
+
+### Timeline Example: Initial Delays
+
+`initial_reply_delay_sec` affects the timestamp of the seeded initial applicant message.
+
+What it does mean:
+
+- the first applicant message gets `created_at = vacancy_created_at + initial_reply_delay_sec`
+
+What it does not mean:
+
+- negotiation creation is not deferred
+- `GET /negotiations/response` still sees the negotiation immediately after vacancy creation
+
+This matters for import flows:
+
+- if your importer filters by message timestamps or sync windows, `initial_reply_delay_sec` can make the first inbound message look newer
+- if your importer only checks whether the negotiation exists in `response`, the negotiation is visible immediately
+
+## Delayed Inbound Semantics
+
+There are two inbound moments in this sandbox:
+
+1. Initial inbound
+- created together with vacancy creation
+- belongs to the negotiation from the start
+- timestamp can be shifted by `initial_reply_delay_sec`
+- does not require any employer action
+
+2. Follow-up inbound
+- appears only after employer sends a message
+- scheduled using `follow_up_delay_sec`
+- can be materialized deterministically via:
+  - `POST /_mock/time/advance`
+  - `POST /_mock/time/flush-delayed-events`
+
+Polling expectations:
+
+- `GET /negotiations/response` is about negotiations in a collection, not about “new unread inbound only”
+- `GET /negotiations/{id}/messages` is the source of truth for thread contents
+- after employer send, the next applicant reply will not appear until delayed events are processed by time control or real time passes
+
 ## User Quickstart
 
 1. Set your base URL and auth mode:
@@ -192,6 +288,49 @@ Reset the whole sandbox instance:
 ```bash
 curl -s -X POST -H "Authorization: Bearer $TOKEN" "$BASE/_mock/reset"
 ```
+
+## Smoke Scenarios
+
+### Import-Only Smoke
+
+Use when you only want to verify that your client can discover negotiations and read initial inbound messages:
+
+1. `POST /_mock/vacancies`
+2. `GET /negotiations/response?vacancy_id=...`
+3. `GET /negotiations/{id}/messages`
+
+Expected result:
+
+- negotiation exists immediately
+- one applicant message already exists in the thread
+
+### Send + Delayed Reply Smoke
+
+Use when you want the full recruiter loop:
+
+1. `POST /_mock/vacancies`
+2. `GET /negotiations/response?vacancy_id=...`
+3. `POST /negotiations/{id}/messages`
+4. `POST /_mock/time/flush-delayed-events`
+5. `GET /negotiations/{id}/messages`
+
+Expected result:
+
+- thread contains applicant -> employer -> applicant
+
+### Forced Error Smoke
+
+Use when you want retry/error-handling coverage:
+
+1. `POST /_mock/errors`
+2. trigger the target HH-like route
+3. inspect `/_mock/events`
+4. repeat request after forced error is consumed
+
+Expected result:
+
+- first request fails with configured status
+- later request succeeds if `times=1`
 
 ## Local Development
 

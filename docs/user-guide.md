@@ -31,6 +31,21 @@
 - переходы между состояниями
 - поведение агента при многошаговом диалоге
 
+## Black-Box Semantics
+
+Важно для внешнего клиента:
+
+- `POST /_mock/vacancies` создаёт vacancy и negotiations сразу
+- initial applicant message тоже создаётся сразу, но его `created_at` может быть сдвинут через `initial_reply_delay_sec`
+- `GET /negotiations/response` видит negotiation сразу после создания vacancy
+- follow-up applicant reply появляется только после employer message
+- follow-up reply не требует реального ожидания, если использовать `/_mock/time/*`
+
+Если думать совсем просто:
+
+- vacancy creation даёт вам готовую negotiation для import/poll
+- send работодателя создаёт условие для следующего delayed inbound
+
 ## Самый короткий сценарий
 
 1. Подготовить base URL и token:
@@ -89,6 +104,25 @@ curl -s -X POST "$BASE/_mock/time/flush-delayed-events" \
 
 8. Снова запросить messages.
 
+## Timeline
+
+Минимальный black-box timeline:
+
+1. `POST /_mock/vacancies`
+2. `GET /negotiations/response`
+3. `GET /negotiations/{id}/messages`
+4. `POST /negotiations/{id}/messages`
+5. `POST /_mock/time/flush-delayed-events`
+6. `GET /negotiations/{id}/messages`
+
+Ожидаемое поведение:
+
+- шаг `2`: negotiation уже видна
+- шаг `3`: initial applicant message уже есть
+- шаг `4`: employer message записан сразу
+- шаг `5`: delayed applicant follow-up становится видимым
+- шаг `6`: в thread уже три сообщения
+
 ## Управляемые ошибки
 
 Пример: один раз вернуть `429 Too Many Requests` на следующий `GET /negotiations/.../messages`:
@@ -134,6 +168,28 @@ curl -s -H "Authorization: Bearer $TOKEN" "$BASE/_mock/events?limit=20"
 ```bash
 curl -s -X POST -H "Authorization: Bearer $TOKEN" "$BASE/_mock/reset"
 ```
+
+## Готовые сценарии
+
+`Import-only smoke`
+
+- создать vacancy
+- спросить `GET /negotiations/response`
+- прочитать initial inbound через `GET /messages`
+
+`Send + delayed reply smoke`
+
+- создать vacancy
+- отправить employer reply
+- сделать `/_mock/time/flush-delayed-events`
+- убедиться, что пришёл applicant follow-up
+
+`Forced error smoke`
+
+- добавить error scenario через `/_mock/errors`
+- вызвать целевой route
+- посмотреть `/_mock/events`
+- повторить вызов после исчерпания forced error
 
 ## Что важно помнить
 
