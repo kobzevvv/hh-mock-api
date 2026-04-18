@@ -1,0 +1,53 @@
+name: Deploy Public Sandbox
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GCP_REGION: ${{ vars.GCP_REGION }}
+      HH_MOCK_SERVICE_NAME: ${{ vars.HH_MOCK_SERVICE_NAME }}
+      HH_MOCK_BEARER_TOKEN: ${{ secrets.HH_MOCK_BEARER_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npm run build
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v3
+      - name: Validate deploy inputs
+        run: |
+          test -n "$GCP_PROJECT_ID"
+          test -n "$GCP_REGION"
+          test -n "$HH_MOCK_SERVICE_NAME"
+          test -n "$HH_MOCK_BEARER_TOKEN"
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy "$HH_MOCK_SERVICE_NAME" \
+            --project "$GCP_PROJECT_ID" \
+            --region "$GCP_REGION" \
+            --source . \
+            --allow-unauthenticated \
+            --set-env-vars "NODE_ENV=production,HH_MOCK_AUTH_MODE=bearer,HH_MOCK_BEARER_TOKEN=$HH_MOCK_BEARER_TOKEN"
+      - name: Smoke deployed service
+        run: |
+          SERVICE_URL="$(gcloud run services describe "$HH_MOCK_SERVICE_NAME" \
+            --project "$GCP_PROJECT_ID" \
+            --region "$GCP_REGION" \
+            --format='value(status.url)')"
+          test -n "$SERVICE_URL"
+          curl -fsS "$SERVICE_URL/health"

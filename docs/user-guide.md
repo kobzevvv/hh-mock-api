@@ -13,6 +13,8 @@
 - отдать отклики через HH-like API
 - принять ответ работодателя
 - прислать следующее сообщение от кандидата с задержкой
+- принять `application/x-www-form-urlencoded` там, где это ожидает обычный HH client
+- управляемо отдать `401`, `403`, `404`, `429` через control API
 
 ## Как думать про сервис
 
@@ -28,12 +30,14 @@
 
 ## Самый короткий сценарий
 
-1. Получить token:
+1. Подготовить base URL и token:
 
 ```bash
 BASE=https://your-hh-mock.example.com
-TOKEN=$(gcloud auth print-identity-token)
+TOKEN=mock_access_token
 ```
+
+Если deploy private, вместо synthetic bearer можно использовать identity token Cloud Run.
 
 2. Создать вакансию:
 
@@ -75,6 +79,28 @@ curl -s -X POST "$BASE/negotiations/<negotiation_id>/messages" \
 
 7. Через 20-30 секунд снова запросить messages.
 
+## Управляемые ошибки
+
+Пример: один раз вернуть `429 Too Many Requests` на следующий `GET /negotiations/.../messages`:
+
+```bash
+curl -s -X POST "$BASE/_mock/errors" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "status": 429,
+    "method": "GET",
+    "path_prefix": "/negotiations/",
+    "repeat": 1
+  }'
+```
+
+Очистить все error scenarios:
+
+```bash
+curl -s -X DELETE -H "Authorization: Bearer $TOKEN" "$BASE/_mock/errors"
+```
+
 ## Что важно помнить
 
 - TTL по умолчанию `3 часа`
@@ -90,12 +116,17 @@ curl -s -X POST "$BASE/negotiations/<negotiation_id>/messages" \
 - продолжать слать привычные HH-like запросы
 - продолжать слать `Authorization` и `HH-User-Agent`, если у клиента это уже есть
 
+Поддерживаемый контракт и ограничения:
+
+- [supported-contract.md](supported-contract.md)
+- [backlog.md](backlog.md)
+- [public-sandbox-deploy.md](public-sandbox-deploy.md)
+
 ## Чего пока нет
 
 - durable state
 - Firestore
 - Cloud Tasks
 - real HH fixtures как строгий contract layer на все endpoints
-- error injection `401/403/429`
 
 Это сознательно отложено, потому что для текущей цели MVP уже полезен.

@@ -16,6 +16,9 @@ Current deployment:
 - HH-like endpoints work for negotiations, messages, states, resumes, `/token`, `/me`
 - employer replies trigger delayed applicant replies
 - vacancy TTL defaults to `10800` seconds = `3 hours`
+- `application/x-www-form-urlencoded` is supported on `/token` and `POST /negotiations/{id}/messages`
+- app-level auth supports `HH_MOCK_AUTH_MODE=none|bearer`
+- forced error scenarios support `401`, `403`, `404`, `429`
 - the service has been smoke-tested in Cloud Run
 
 ## Current Limitation
@@ -48,16 +51,27 @@ Mock control routes:
 - `POST /_mock/vacancies`
 - `GET /_mock/vacancies/{vacancyId}`
 - `POST /_mock/tasks/run-due`
+- `GET /_mock/errors`
+- `POST /_mock/errors`
+- `DELETE /_mock/errors`
 - `GET /health`
+
+Contract and roadmap:
+
+- [docs/supported-contract.md](docs/supported-contract.md)
+- [docs/backlog.md](docs/backlog.md)
+- [docs/public-sandbox-deploy.md](docs/public-sandbox-deploy.md)
 
 ## User Quickstart
 
-1. Set your base URL and, if needed, an identity token:
+1. Set your base URL and auth mode:
 
 ```bash
 BASE=https://your-hh-mock.example.com
-TOKEN=$(gcloud auth print-identity-token)
+TOKEN=mock_access_token
 ```
+
+For private Cloud Run deployments you can still use an identity token instead.
 
 2. Check health:
 
@@ -119,6 +133,28 @@ curl -s -X POST "$BASE/negotiations/<negotiation_id>/messages" \
 
 7. Wait about 20-30 seconds and poll messages again. The candidate will answer.
 
+## Error Injection
+
+Force one `429` for the next messages read:
+
+```bash
+curl -s -X POST "$BASE/_mock/errors" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "status": 429,
+    "method": "GET",
+    "path_prefix": "/negotiations/",
+    "repeat": 1
+  }'
+```
+
+List active error scenarios:
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" "$BASE/_mock/errors"
+```
+
 ## Local Development
 
 ```bash
@@ -130,6 +166,14 @@ Local base URL:
 
 ```bash
 http://localhost:8080
+```
+
+Example local sandbox with HH-style bearer auth:
+
+```bash
+HH_MOCK_AUTH_MODE=bearer \
+HH_MOCK_BEARER_TOKEN=mock_access_token \
+npm run dev
 ```
 
 Verification:
@@ -155,6 +199,9 @@ gcloud run deploy hh-mock-api \
 Public vs authenticated access depends on how you deploy the service.
 If you deploy to a private Cloud Run service, call it with an identity token.
 If you deploy a public sandbox instance, `BASE` alone is enough.
+
+For a GitHub Actions deploy workflow and required repo secrets, see
+[docs/public-sandbox-deploy.md](docs/public-sandbox-deploy.md).
 
 ## Repo Structure
 

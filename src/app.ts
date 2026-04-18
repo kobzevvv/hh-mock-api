@@ -6,7 +6,10 @@ import { InMemoryMockStore, type MockStore, type NegotiationCollection } from ".
 const createVacancySchema = z.object({
   vacancy_text: z.string().min(1),
   ttl_seconds: z.number().int().positive().max(86400).default(10800),
-  candidate_count: z.number().int().min(1).max(3).default(2)
+  candidate_count: z.number().int().min(1).max(3).default(2),
+  initial_reply_delay_sec: z.number().int().min(0).max(300).default(5),
+  follow_up_delay_sec: z.number().int().min(0).max(300).default(20),
+  auto_advance_on_employer_message: z.boolean().default(false)
 });
 
 const sendMessageSchema = z.object({
@@ -15,6 +18,14 @@ const sendMessageSchema = z.object({
 
 const changeStateSchema = z.object({
   collection: z.enum(["response", "phone_interview", "interview", "offer", "discard"])
+});
+
+const errorScenarioSchema = z.object({
+  status: z.enum(["401", "403", "404", "429"]).transform((value) => Number(value) as 401 | 403 | 404 | 429),
+  method: z.string().trim().min(1).default("*"),
+  path_pattern: z.string().trim().min(1),
+  times: z.number().int().positive().max(20).default(1),
+  negotiation_id: z.string().trim().min(1).optional()
 });
 
 const hhCollections = new Set<NegotiationCollection>(["response", "phone_interview", "interview", "offer", "discard"]);
@@ -27,14 +38,78 @@ function requestBaseUrl(request: { headers: Record<string, unknown> }) {
   return `${protocol}://${host}`;
 }
 
-export function buildApp({ store = new InMemoryMockStore(), now = () => new Date() }: { store?: MockStore; now?: () => Date } = {}) {
+function resolveAuthMode(env: NodeJS.ProcessEnv) {
+  const mode = String(env.HH_MOCK_AUTH_MODE ?? "none").trim().toLowerCase();
+  return mode === "bearer" ? "bearer" : "none";
+}
+
+function buildHhError(status: 401 | 403 | 404 | 429) {
+  const payloads = {
+    401: {
+      errors: [{ type: "oauth", value: "token_expired" }],
+      error: "invalid_token",
+      description: "Access token expired"
+    },
+    403: {
+      errors: [{ type: "forbidden", value: "insufficient_permissions" }],
+      error: "forbidden",
+      description: "Employer account has no paid access"
+    },
+    404: {
+      errors: [{ type: "not_found", value: "resource not found" }],
+      error: "not_found",
+      description: "Requested HH resource not found"
+    },
+    429: {
+      errors: [{ type: "rate_limit", value: "too_many_requests" }],
+      error: "too_many_requests",
+      description: "Rate limit exceeded"
+    }
+  } as const;
+  return payloads[status];
+}
+
+export function buildApp({
+  store = new InMemoryMockStore(),
+  now = () => new Date(),
+  env = process.env
+}: { store?: MockStore; now?: () => Date; env?: NodeJS.ProcessEnv } = {}) {
   const app = Fastify({ logger: true });
   void app.register(formbody);
+  const authMode = resolveAuthMode(env);
+  const expectedBearer = env.HH_MOCK_BEARER_TOKEN ? String(env.HH_MOCK_BEARER_TOKEN) : null;
 
   app.addHook("onRequest", async (request, reply) => {
     reply.header("x-request-id", request.id);
     store.sweep(now());
     store.runDue(now());
+
+    if (request.url === "/health") return;
+
+    const forced = store.matchErrorScenario({
+      method: request.method,
+      path: request.url,
+      negotiationId: typeof (request.params as Record<string, unknown> | undefined)?.id === "string"
+        ? String((request.params as Record<string, unknown>).id)
+        : null
+    });
+    if (forced) {
+      if (forced.status === 429) {
+        reply.header("retry-after", "30");
+      }
+      return reply.code(forced.status).send(buildHhError(forced.status));
+    }
+
+    if (authMode !== "bearer" || request.url === "/token") return;
+
+    const authorization = String(request.headers.authorization ?? "");
+    const match = authorization.match(/^Bearer\s+(.+)$/i);
+    if (!match) {
+      return reply.code(401).send(buildHhError(401));
+    }
+    if (expectedBearer && match[1] !== expectedBearer) {
+      return reply.code(401).send(buildHhError(401));
+    }
   });
 
   app.get("/health", async () => ({
@@ -47,7 +122,10 @@ export function buildApp({ store = new InMemoryMockStore(), now = () => new Date
     const vacancy = store.createVacancy({
       vacancyText: payload.vacancy_text,
       ttlSeconds: payload.ttl_seconds,
-      candidateCount: payload.candidate_count
+      candidateCount: payload.candidate_count,
+      autoAdvanceOnEmployerMessage: payload.auto_advance_on_employer_message,
+      initialReplyDelaySec: payload.initial_reply_delay_sec,
+      followUpDelaySec: payload.follow_up_delay_sec
     }, now());
 
     return reply.code(201).send({
@@ -88,6 +166,27 @@ export function buildApp({ store = new InMemoryMockStore(), now = () => new Date
   app.post("/_mock/tasks/run-due", async () => ({
     processed: store.runDue(now())
   }));
+
+  app.get("/_mock/errors", async () => ({
+    items: store.listErrorScenarios()
+  }));
+
+  app.post("/_mock/errors", async (request, reply) => {
+    const payload = errorScenarioSchema.parse(request.body ?? {});
+    const scenario = store.addErrorScenario({
+      status: payload.status,
+      method: payload.method.toUpperCase(),
+      pathPattern: payload.path_pattern,
+      remaining: payload.times,
+      negotiationId: payload.negotiation_id ?? null
+    });
+    return reply.code(201).send(scenario);
+  });
+
+  app.delete("/_mock/errors", async () => {
+    store.clearErrorScenarios();
+    return { ok: true };
+  });
 
   app.post("/token", async (request) => {
     const payload = request.body as Record<string, unknown> | undefined;

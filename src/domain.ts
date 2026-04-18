@@ -35,6 +35,7 @@ export interface Negotiation {
   messages: MockMessage[];
   scheduledReplyAt: string | null;
   nextApplicantPrompt: string | null;
+  autoAdvanceOnEmployerMessage: boolean;
 }
 
 export interface Vacancy {
@@ -51,6 +52,18 @@ export interface CreateVacancyInput {
   vacancyText: string;
   ttlSeconds: number;
   candidateCount: number;
+  autoAdvanceOnEmployerMessage?: boolean;
+  initialReplyDelaySec?: number;
+  followUpDelaySec?: number;
+}
+
+export interface ErrorScenario {
+  scenarioId: string;
+  status: 401 | 403 | 404 | 429;
+  method: string;
+  pathPattern: string;
+  remaining: number;
+  negotiationId: string | null;
 }
 
 export interface MockStore {
@@ -63,6 +76,10 @@ export interface MockStore {
   changeState(negotiationId: string, collection: NegotiationCollection, now: Date): Negotiation | null;
   sweep(now: Date): void;
   runDue(now: Date): number;
+  listErrorScenarios(): ErrorScenario[];
+  addErrorScenario(input: Omit<ErrorScenario, "scenarioId">): ErrorScenario;
+  clearErrorScenarios(): void;
+  matchErrorScenario(details: { method: string; path: string; negotiationId?: string | null }): ErrorScenario | null;
 }
 
 function iso(date: Date): string {
@@ -109,12 +126,16 @@ function buildReply(candidate: CandidateProfile, employerText: string): string {
 export class InMemoryMockStore implements MockStore {
   private vacancies = new Map<string, Vacancy>();
   private negotiations = new Map<string, Negotiation>();
+  private errorScenarios = new Map<string, ErrorScenario>();
 
   createVacancy(input: CreateVacancyInput, now: Date): Vacancy {
     const vacancyId = randomUUID();
     const parsed = parseVacancy(input.vacancyText);
     const expiresAt = plusSeconds(now, input.ttlSeconds);
-    const candidatePlan = makeCandidates(input.candidateCount);
+    const candidatePlan = makeCandidates(input.candidateCount, {
+      initialReplyDelaySec: input.initialReplyDelaySec,
+      followUpDelaySec: input.followUpDelaySec
+    });
     const negotiationIds: string[] = [];
 
     for (const candidate of candidatePlan) {
@@ -137,7 +158,8 @@ export class InMemoryMockStore implements MockStore {
         candidate,
         messages: [initialMessage],
         scheduledReplyAt: null,
-        nextApplicantPrompt: null
+        nextApplicantPrompt: null,
+        autoAdvanceOnEmployerMessage: input.autoAdvanceOnEmployerMessage === true
       });
       negotiationIds.push(negotiationId);
     }
@@ -198,7 +220,7 @@ export class InMemoryMockStore implements MockStore {
     negotiation.updatedAt = message.createdAt;
     negotiation.scheduledReplyAt = iso(plusSeconds(now, negotiation.candidate.followUpLatencySec));
     negotiation.nextApplicantPrompt = text;
-    if (negotiation.collection === "response") {
+    if (negotiation.autoAdvanceOnEmployerMessage && negotiation.collection === "response") {
       negotiation.collection = "phone_interview";
     }
     return { hh_message_id: messageId };
@@ -247,12 +269,43 @@ export class InMemoryMockStore implements MockStore {
     return processed;
   }
 
+  listErrorScenarios(): ErrorScenario[] {
+    return [...this.errorScenarios.values()].map((item) => structuredClone(item));
+  }
+
+  addErrorScenario(input: Omit<ErrorScenario, "scenarioId">): ErrorScenario {
+    const scenario: ErrorScenario = {
+      scenarioId: randomUUID(),
+      ...input
+    };
+    this.errorScenarios.set(scenario.scenarioId, scenario);
+    return structuredClone(scenario);
+  }
+
+  clearErrorScenarios(): void {
+    this.errorScenarios.clear();
+  }
+
+  matchErrorScenario(details: { method: string; path: string; negotiationId?: string | null }): ErrorScenario | null {
+    for (const scenario of this.errorScenarios.values()) {
+      if (scenario.method !== "*" && scenario.method !== details.method.toUpperCase()) continue;
+      if (!details.path.startsWith(scenario.pathPattern)) continue;
+      if (scenario.negotiationId && scenario.negotiationId !== (details.negotiationId ?? null)) continue;
+      scenario.remaining -= 1;
+      if (scenario.remaining <= 0) {
+        this.errorScenarios.delete(scenario.scenarioId);
+      }
+      return structuredClone(scenario);
+    }
+    return null;
+  }
+
   private cloneOrNull<T>(value: T | undefined): T | null {
     return value ? structuredClone(value) : null;
   }
 }
 
-function makeCandidates(candidateCount: number): CandidateProfile[] {
+function makeCandidates(candidateCount: number, overrides: { initialReplyDelaySec?: number; followUpDelaySec?: number } = {}): CandidateProfile[] {
   const base: CandidateProfile[] = [
     {
       id: "candidate-1",
@@ -285,5 +338,11 @@ function makeCandidates(candidateCount: number): CandidateProfile[] {
       followUpLatencySec: 30
     }
   ];
-  return base.slice(0, Math.max(1, Math.min(candidateCount, base.length)));
+  return base
+    .slice(0, Math.max(1, Math.min(candidateCount, base.length)))
+    .map((candidate) => ({
+      ...candidate,
+      responseLatencySec: overrides.initialReplyDelaySec ?? candidate.responseLatencySec,
+      followUpLatencySec: overrides.followUpDelaySec ?? candidate.followUpLatencySec
+    }));
 }
